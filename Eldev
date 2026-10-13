@@ -1,0 +1,11 @@
+;;; -*- mode: emacs-lisp; lexical-binding: t -*-
+
+(eldev-use-package-archive 'gnu-elpa)
+(eldev-use-package-archive 'melpa)
+
+;; Use HEAD instead of latest stable tag for VC repos.
+(setq eldev-prefer-stable-archives nil)
+
+(eldev-use-vc-repository 'vui :github "d12frosted/vui.el")
+
+(eldev-use-vc-repository 'vui-hash-table :github "ginqi7/vui-hash-table.el")
