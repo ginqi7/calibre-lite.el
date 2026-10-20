@@ -38,7 +38,6 @@
 (require 'subr-x)
 (require 'ansi-color)
 
-(declare-function epub-reader-open "epub-reader" (file))
 (declare-function dired-get-marked-files "dired" (&optional localp))
 
 (defgroup calibre-lite nil
@@ -70,12 +69,32 @@ Run \"calibredb set_metadata --list-fields\" for the full list."
   :type '(repeat string)
   :group 'calibre-lite)
 
-(defcustom calibre-lite-file-openers
-  '(("epub" . epub-reader-open))
+(defcustom calibre-lite-open-epub-function nil
+  "Function used to open an EPUB book, or nil for the system default.
+The function is called with the absolute file name.  Set it to the
+reader you prefer; when nil, the file is handed to
+`calibre-lite-system-opener' and so opens in the system default EPUB
+application."
+  :type '(choice (const :tag "System default application" nil)
+                 function)
+  :group 'calibre-lite)
+
+(defcustom calibre-lite-open-pdf-function nil
+  "Function used to open a PDF book, or nil for the system default.
+The function is called with the absolute file name.  Set it to a
+function such as `find-file' to read PDFs inside Emacs; when nil, the
+file is handed to `calibre-lite-system-opener' and so opens in the
+system default PDF application."
+  :type '(choice (const :tag "System default application" nil)
+                 function)
+  :group 'calibre-lite)
+
+(defcustom calibre-lite-file-openers nil
   "How to open a book file, keyed by lower-case file name extension.
-Each value is called with the file name.  Extensions that are not
-listed here are handed to the system default application instead, so
-PDFs open in Preview or whatever you have registered for them."
+Each value is called with the file name.  EPUB and PDF are not looked
+up here; they have their own options, `calibre-lite-open-epub-function'
+and `calibre-lite-open-pdf-function'.  Extensions that are not listed
+here are handed to the system default application."
   :type '(alist :key-type (string :tag "Extension")
                 :value-type (function :tag "Opener"))
   :group 'calibre-lite)
@@ -268,30 +287,43 @@ current buffer."
           (message "calibre-lite: no book with id %s" id)))
     (calibre-lite-list (lambda (_books) (calibre-lite-get id callback)))))
 
+(defun calibre-lite--preferred-file-p (file)
+  "Return non-nil when FILE is in a format calibre-lite opens itself.
+EPUB and PDF always count; any other extension counts when
+`calibre-lite-file-openers' has an entry for it."
+  (let ((extension (downcase (or (file-name-extension file) ""))))
+    (or (member extension '("epub" "pdf"))
+        (assoc-string extension calibre-lite-file-openers t))))
+
 (defun calibre-lite--book-file (book)
   "Return the file to open for BOOK, a calibredb record.
 The \"formats\" field lists one absolute file name per format in no
-particular order, so prefer one that `calibre-lite-file-openers' knows
-how to handle and only fall back to the first otherwise."
+particular order, so prefer a format calibre-lite knows how to open
+\(see `calibre-lite--preferred-file-p') and only fall back to the
+first otherwise."
   (let ((files (gethash "formats" book)))
-    (or (cl-find-if (lambda (file)
-                      (assoc-string (file-name-extension file)
-                                    calibre-lite-file-openers t))
-                    files)
+    (or (cl-find-if #'calibre-lite--preferred-file-p files)
         (car files))))
 
 (defun calibre-lite--open-with-opener (file)
-  "Open FILE with the opener registered for its extension.
-See `calibre-lite-file-openers'; when nothing is registered for the
-extension, hand the file to `calibre-lite-system-opener'."
-  (let* ((extension (file-name-extension file))
-         (opener (and extension
-                      (cdr (assoc-string extension calibre-lite-file-openers t)))))
+  "Open FILE, letting the user configure how.
+EPUB and PDF are opened with `calibre-lite-open-epub-function' and
+`calibre-lite-open-pdf-function' when those are set; other extensions
+are looked up in `calibre-lite-file-openers'.  When no function is
+configured, hand FILE to `calibre-lite-system-opener'."
+  (let* ((extension (and (file-name-extension file)
+                         (downcase (file-name-extension file))))
+         (opener (pcase extension
+                   ("epub" calibre-lite-open-epub-function)
+                   ("pdf" calibre-lite-open-pdf-function)
+                   (_ (and extension
+                           (cdr (assoc-string extension
+                                              calibre-lite-file-openers t)))))))
     (cond
      ((null opener)
       (apply #'start-process "calibre-lite-open" nil
              (append calibre-lite-system-opener (list file))))
-     ((fboundp opener)
+     ((functionp opener)
       (funcall opener file))
      (t
       (user-error "calibre-lite: %s is not a known opener (see `calibre-lite-file-openers')"
